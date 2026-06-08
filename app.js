@@ -40,12 +40,19 @@ const SUBCATEGORIAS = {
   OTROS_SI:         ['Cambio de centro de costos','Traslado horizontal','Cambio de operación','Cambio de ciudad','Cambio de cargo'],
 };
 
+// Estados del sistema
+// Coordinador crea → siempre "Pendiente"
+// Legalizador puede cambiar a: En Proceso, Finalizado, Cancelado
+// Administrador puede cambiar a cualquiera
 const ESTADOS_COLORS = {
   'Pendiente':   'badge-pendiente',
   'En Proceso':  'badge-en-proceso',
-  'Completado':  'badge-completado',
-  'Rechazado':   'badge-rechazado',
+  'Finalizado':  'badge-completado',
+  'Cancelado':   'badge-rechazado',
 };
+
+// Estados que puede asignar el Legalizador/Admin
+const ESTADOS_GESTION = ['Pendiente', 'En Proceso', 'Finalizado', 'Cancelado'];
 
 // ============================================================
 // API — Comunicación con Google Apps Script
@@ -110,9 +117,9 @@ const API = {
         { id:'LST_003', tipo:'Operacion', valor:'Customer Service', estado:'Activo', orden:1 },
       ],
       getUsers: [
-        { id:'USR_001', nombre:'Administrador', email:'admin@sistema.com', rol:'Administrador', proyecto:'Todos', estado:'Activo' },
-        { id:'USR_002', nombre:'Líder Uno',     email:'lider@sistema.com', rol:'Lider Administrativo', proyecto:'Todos', estado:'Activo' },
-        { id:'USR_003', nombre:'Coordinador 1', email:'coord@sistema.com', rol:'Coordinador', proyecto:'Proyecto Alpha', estado:'Activo' },
+        { id:'USR_001', nombre:'Administrador',  email:'admin@sistema.com',        rol:'Administrador', proyecto:'Todos', estado:'Activo' },
+        { id:'USR_002', nombre:'Legalizador Demo',email:'legalizador@sistema.com', rol:'Legalizador',    proyecto:'Todos', estado:'Activo' },
+        { id:'USR_003', nombre:'Coordinador 1',  email:'coord@sistema.com',        rol:'Coordinador',   proyecto:'Proyecto Alpha', estado:'Activo' },
       ],
       getRecords: generateMockRecords(p.modulo || 'INASISTENCIAS', 8),
       getDashboardData: {
@@ -156,7 +163,7 @@ const API = {
 };
 
 function generateMockRecords(mod, n) {
-  const estados = ['Pendiente','En Proceso','Completado','Rechazado'];
+  const estados = ['Pendiente','En Proceso','Finalizado','Cancelado'];
   const names   = ['Juan García','María López','Carlos Ruiz','Ana Torres','Luis Martín','Sara Gómez'];
   const projs   = ['Proyecto Alpha','Proyecto Beta'];
   const coords  = ['Juan García','María López'];
@@ -228,16 +235,17 @@ async function renderView(view, params) {
   content.innerHTML = '<div class="d-flex justify-content-center py-5"><div class="loading-spinner"></div></div>';
 
   try {
-    if (view === 'dashboard')            await renderDashboard(content);
-    else if (MODULOS[view])              await renderModulo(content, view, params);
-    else if (view === 'historial')       await renderHistorial(content);
-    else if (view === 'auditoria')       await renderAuditoria(content);
-    else if (view === 'usuarios')        await renderUsuarios(content);
-    else if (view === 'configuracion')   renderConfiguracion(content);
-    else if (view === 'proyectos_config')await renderProyectosConfig(content);
-    else if (view === 'listas_config')   await renderListasConfig(content);
-    else if (view === 'preguntas_config')await renderPreguntasConfig(content);
-    else if (view === 'sla')             await renderSLA(content);
+    if (view === 'dashboard')              await renderDashboard(content);
+    else if (MODULOS[view])               await renderModulo(content, view, params);
+    else if (view === 'panel_legalizador') await renderPanelLegalizador(content);
+    else if (view === 'historial')         await renderHistorial(content);
+    else if (view === 'auditoria')         await renderAuditoria(content);
+    else if (view === 'usuarios')          await renderUsuarios(content);
+    else if (view === 'configuracion')     renderConfiguracion(content);
+    else if (view === 'proyectos_config')  await renderProyectosConfig(content);
+    else if (view === 'listas_config')     await renderListasConfig(content);
+    else if (view === 'preguntas_config')  await renderPreguntasConfig(content);
+    else if (view === 'sla')               await renderSLA(content);
     else content.innerHTML = '<div class="empty-state"><div class="es-icon">🚧</div><h6>Vista en construcción</h6></div>';
   } catch(err) {
     content.innerHTML = `<div class="alert alert-danger"><b>Error:</b> ${err.message}</div>`;
@@ -449,7 +457,11 @@ function renderTablaModulo(modulo, records) {
     </div>` : '';
 
   const cols = getColumnasPorModulo(modulo);
-  headEl.innerHTML = `<tr>${cols.map(c=>`<th>${c.label}</th>`).join('')}<th>Acciones</th></tr>`;
+  // Columna ID Servicio solo visible para Legalizador y Admin
+  const colsVisible = puedeVerTodos()
+    ? [...cols, { key:'ID_Servicio', label:'ID Servicio' }]
+    : cols;
+  headEl.innerHTML = `<tr>${colsVisible.map(c=>`<th>${c.label}</th>`).join('')}<th>Acciones</th></tr>`;
 
   if (!records.length) {
     bodyEl.innerHTML = `<tr><td colspan="${cols.length+1}">
@@ -461,11 +473,11 @@ function renderTablaModulo(modulo, records) {
 
   bodyEl.innerHTML = records.map(r => `
     <tr class="${r.vencido ? 'row-vencido' : ''}">
-      ${cols.map(c => `<td>${formatCellValue(c, r)}</td>`).join('')}
+      ${colsVisible.map(c => `<td>${formatCellValue(c, r)}</td>`).join('')}
       <td>
         <div class="action-btns">
           <button class="btn-action view" onclick="verDetalle('${modulo}','${r.ID}')" title="Ver detalle"><i class="bi bi-eye"></i></button>
-          ${puedeEditar(r) ? `<button class="btn-action edit" onclick="editarRegistro('${modulo}','${r.ID}')" title="Editar"><i class="bi bi-pencil"></i></button>` : ''}
+          ${puedeActualizarGestion(r) ? `<button class="btn-action edit" style="background:rgba(32,201,151,.15);color:#20c997" onclick="openGestionModal('${modulo}','${r.ID}')" title="Actualizar gestión"><i class="bi bi-pencil-square"></i></button>` : ''}
           ${puedeEliminar() ? `<button class="btn-action del" onclick="eliminarRegistro('${modulo}','${r.ID}')" title="Eliminar"><i class="bi bi-trash"></i></button>` : ''}
         </div>
       </td>
@@ -1066,7 +1078,7 @@ function openUserModal(userId = null) {
       <div class="col-md-6"><label class="form-label">Rol <span class="required">*</span></label>
         <select class="form-select" name="rol" required>
           <option value="">Seleccione...</option>
-          ${['Administrador','Lider Administrativo','Coordinador'].map(r=>`<option ${user?.rol===r?'selected':''}>${r}</option>`).join('')}
+          ${['Administrador','Legalizador','Coordinador'].map(r=>`<option ${user?.rol===r?'selected':''}>${r}</option>`).join('')}
         </select></div>
       <div class="col-md-6"><label class="form-label">Proyecto Asignado</label>
         <select class="form-select" name="proyecto">
@@ -1561,6 +1573,235 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================================
+// MODAL GESTIÓN — Legalizador / Admin actualiza caso
+// ============================================================
+function openGestionModal(modulo, id) {
+  const record = (App.cache.records[modulo] || []).find(r => r.ID === id);
+  if (!record) return;
+
+  document.getElementById('gestionModalTitle').textContent =
+    `Gestionar caso — ${MODULOS[modulo]?.label || modulo}`;
+
+  document.getElementById('gestionModalBody').innerHTML = `
+  <div class="mb-3 p-3 bg-light rounded">
+    <div class="row g-2 text-sm">
+      <div class="col-6"><small class="text-muted">ID Caso</small><div class="fw-bold"><code>${record.ID}</code></div></div>
+      <div class="col-6"><small class="text-muted">Colaborador</small><div class="fw-bold">${record.NombreColaborador || '—'}</div></div>
+      <div class="col-6"><small class="text-muted">Coordinador</small><div>${record.Coordinador || '—'}</div></div>
+      <div class="col-6"><small class="text-muted">Fecha</small><div>${record.Fecha || '—'}</div></div>
+    </div>
+  </div>
+  <form id="gestionForm">
+    <div class="mb-3">
+      <label class="form-label fw-bold">ID del Servicio <span class="text-danger">*</span>
+        <small class="text-muted fw-normal ms-1">(número o código asignado al caso)</small>
+      </label>
+      <input type="text" class="form-control" name="ID_Servicio"
+             value="${record.ID_Servicio || ''}"
+             placeholder="Ej: TKT-2025-001234" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold">Estado del caso <span class="text-danger">*</span></label>
+      <select class="form-select" name="Estado" required>
+        ${ESTADOS_GESTION.map(e =>
+          `<option value="${e}" ${record.Estado === e ? 'selected' : ''}>${e}</option>`
+        ).join('')}
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold">Descripción de gestión</label>
+      <textarea class="form-control" name="DescripcionGestion" rows="4"
+                placeholder="Detalle lo realizado, motivo de cancelación, novedades adicionales...">${record.DescripcionGestion || ''}</textarea>
+    </div>
+  </form>`;
+
+  document.getElementById('btnGuardarGestion').onclick = () => guardarGestion(modulo, id);
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('gestionModal')).show();
+}
+
+async function guardarGestion(modulo, id) {
+  const form = document.getElementById('gestionForm');
+  if (!form.checkValidity()) { form.reportValidity(); return; }
+
+  const fd = {};
+  new FormData(form).forEach((v, k) => { fd[k] = v; });
+
+  // Si se marca Finalizado o Cancelado → registrar fecha de cierre
+  if (fd.Estado === 'Finalizado' || fd.Estado === 'Cancelado') {
+    fd.FechaCierre   = new Date().toISOString().split('T')[0];
+    fd.UsuarioCierre = App.user.email;
+  }
+
+  showLoading();
+  try {
+    await API.call({
+      action: 'updateRecord',
+      modulo, id,
+      data: fd,
+      usuario: App.user.email,
+    });
+    toast('success', 'Caso actualizado correctamente');
+    bootstrap.Modal.getInstance(document.getElementById('gestionModal')).hide();
+    await loadModuloData(modulo);
+    // Refrescar panel legalizador si está activo
+    if (App.currentView === 'panel_legalizador') await renderPanelLegalizador(document.getElementById('content'));
+  } catch(e) {
+    toast('error', e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// ============================================================
+// PANEL LEGALIZADOR — Vista consolidada de todos los casos
+// ============================================================
+async function renderPanelLegalizador(el) {
+  if (!puedeVerTodos()) {
+    el.innerHTML = '<div class="alert alert-warning">Acceso restringido.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+  <div class="fade-in">
+    <div class="table-wrapper">
+      <div class="table-toolbar">
+        <h6 class="mb-0"><i class="bi bi-kanban-fill me-2 text-danger"></i>Panel de Gestión de Casos</h6>
+        <div class="filter-group ms-auto">
+          <input id="plBusq"    type="text"   placeholder="Buscar..." style="width:160px">
+          <select id="plModulo"><option value="">Todos los módulos</option>
+            ${Object.entries(MODULOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
+          </select>
+          <select id="plEstado"><option value="">Todos los estados</option>
+            ${ESTADOS_GESTION.map(e=>`<option>${e}</option>`).join('')}
+          </select>
+          <button class="btn-outline-custom" onclick="exportarPanelLegalizador()">
+            <i class="bi bi-download"></i> Exportar
+          </button>
+        </div>
+      </div>
+      <div id="plContent">
+        <div class="d-flex justify-content-center py-5"><div class="loading-spinner"></div></div>
+      </div>
+    </div>
+  </div>`;
+
+  // Filtros reactivos
+  ['plBusq','plModulo','plEstado'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => cargarPanelLegalizador());
+    document.getElementById(id)?.addEventListener('change', () => cargarPanelLegalizador());
+  });
+
+  await cargarPanelLegalizador();
+}
+
+async function cargarPanelLegalizador() {
+  const busq   = document.getElementById('plBusq')?.value    || '';
+  const modFil = document.getElementById('plModulo')?.value  || '';
+  const estFil = document.getElementById('plEstado')?.value  || '';
+
+  showLoading();
+  try {
+    // Cargar todos los módulos en paralelo
+    const modulosACargar = modFil ? [modFil] : Object.keys(MODULOS);
+    const resultados = await Promise.all(
+      modulosACargar.map(mod =>
+        API.call({ action:'getRecords', modulo:mod, usuario:App.user.email, rol:App.user.rol, filtros:{} })
+          .then(recs => recs.map(r => ({ ...r, _modulo: mod })))
+          .catch(() => [])
+      )
+    );
+
+    let todos = resultados.flat();
+
+    // Filtros locales
+    if (estFil) todos = todos.filter(r => r.Estado === estFil);
+    if (busq) {
+      const q = busq.toLowerCase();
+      todos = todos.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q)));
+    }
+
+    // Ordenar: Pendientes primero, luego por fecha descendente
+    const orden = { 'Pendiente':0, 'En Proceso':1, 'Finalizado':2, 'Cancelado':3 };
+    todos.sort((a,b) => (orden[a.Estado]||0) - (orden[b.Estado]||0) || (b.Fecha > a.Fecha ? 1 : -1));
+
+    App._panelData = todos;
+
+    const el = document.getElementById('plContent');
+    if (!todos.length) {
+      el.innerHTML = `<div class="empty-state"><div class="es-icon">📭</div><h6>Sin casos</h6><p>No hay registros con los filtros aplicados</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr>
+          <th>ID Caso</th><th>Módulo</th><th>Coordinador</th>
+          <th>Colaborador</th><th>Documento</th><th>Fecha</th>
+          <th>ID Servicio</th><th>Estado</th><th>Descripción Gestión</th><th>Acciones</th>
+        </tr></thead>
+        <tbody>
+          ${todos.map(r => `
+          <tr class="${r.vencido ? 'row-vencido' : ''}">
+            <td><code style="font-size:.73rem">${r.ID}</code></td>
+            <td><span class="badge bg-secondary">${MODULOS[r._modulo]?.label || r._modulo}</span></td>
+            <td>${r.Coordinador || '—'}</td>
+            <td>${r.NombreColaborador || '—'}</td>
+            <td>${r.Documento || '—'}</td>
+            <td>${r.Fecha || '—'}</td>
+            <td>
+              ${r.ID_Servicio
+                ? `<span class="badge bg-info text-dark">${r.ID_Servicio}</span>`
+                : `<span class="text-muted" style="font-size:.8rem">Sin asignar</span>`}
+            </td>
+            <td>${estadoBadge(r.Estado)}</td>
+            <td style="max-width:200px">
+              <small class="text-muted">${r.DescripcionGestion
+                ? (r.DescripcionGestion.length > 60 ? r.DescripcionGestion.substring(0,60)+'...' : r.DescripcionGestion)
+                : '—'}</small>
+            </td>
+            <td>
+              <div class="action-btns">
+                <button class="btn-action view" onclick="verDetalle('${r._modulo}','${r.ID}')" title="Ver detalle">
+                  <i class="bi bi-eye"></i>
+                </button>
+                <button class="btn-action edit" style="background:rgba(32,201,151,.15);color:#20c997"
+                  onclick="openGestionModal('${r._modulo}','${r.ID}')" title="Gestionar caso">
+                  <i class="bi bi-pencil-square"></i>
+                </button>
+              </div>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="p-3 text-muted" style="font-size:.8rem">
+      ${todos.length} caso(s) |
+      Pendientes: <strong>${todos.filter(r=>r.Estado==='Pendiente').length}</strong> |
+      En Proceso: <strong>${todos.filter(r=>r.Estado==='En Proceso').length}</strong> |
+      Finalizados: <strong>${todos.filter(r=>r.Estado==='Finalizado').length}</strong> |
+      Cancelados: <strong>${todos.filter(r=>r.Estado==='Cancelado').length}</strong>
+    </div>`;
+
+    // Cachear registros del panel para que funcione verDetalle
+    Object.keys(MODULOS).forEach(mod => {
+      const del_mod = todos.filter(r => r._modulo === mod);
+      if (del_mod.length) App.cache.records[mod] = [...(App.cache.records[mod]||[]), ...del_mod]
+        .filter((r,i,a) => a.findIndex(x=>x.ID===r.ID)===i); // deduplicar
+    });
+
+  } catch(e) {
+    document.getElementById('plContent').innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+  } finally {
+    hideLoading();
+  }
+}
+
+function exportarPanelLegalizador() {
+  exportCSV(App._panelData || [], 'panel_casos');
+}
+
+// ============================================================
 // EXPORTAR
 // ============================================================
 function exportarTabla(modulo) {
@@ -1646,21 +1887,45 @@ function renderHBarChart(id, labels, values) {
 }
 
 // ============================================================
-// CONTROL DE ACCESO
+// CONTROL DE ACCESO — Roles:
+//   Administrador     : acceso total
+//   Legalizador       : ve todos los casos, actualiza estado/ID servicio/descripción
+//   Coordinador       : solo crea y ve SUS propios casos, no puede editar después de subir
 // ============================================================
+function esAdmin()       { return App.user?.rol === 'Administrador'; }
+function esLegalizador() { return App.user?.rol === 'Legalizador'; }
+function esCoordinador() { return App.user?.rol === 'Coordinador'; }
+
 function puedeCrear() {
-  return ['Administrador','Lider Administrativo','Coordinador'].includes(App.user?.rol);
+  // Todos los roles pueden crear solicitudes
+  return !!App.user;
 }
 function puedeEditar(record) {
   if (!App.user) return false;
-  if (['Administrador','Lider Administrativo'].includes(App.user.rol)) return true;
-  return record?.Usuario === App.user.email || record?.Coordinador === App.user.email;
+  // Admin puede editar todo
+  if (esAdmin()) return true;
+  // Legalizador puede actualizar estado/ID servicio en cualquier caso
+  if (esLegalizador()) return true;
+  // Coordinador NO puede editar después de subir (solo el admin puede autorizar)
+  return false;
+}
+function puedeActualizarGestion(record) {
+  // Solo Admin y Legalizador pueden actualizar estado, ID servicio, descripción
+  return esAdmin() || esLegalizador();
 }
 function puedeEliminar() {
-  return App.user?.rol === 'Administrador';
+  return esAdmin();
 }
 function tieneAccesoAdmin() {
-  return ['Administrador','Lider Administrativo'].includes(App.user?.rol);
+  return esAdmin();
+}
+function tieneAccesoConfig() {
+  // Solo Administrador accede a configuración
+  return esAdmin();
+}
+function puedeVerTodos() {
+  // Coordinador solo ve sus propios registros
+  return esAdmin() || esLegalizador();
 }
 
 // ============================================================
@@ -1836,13 +2101,13 @@ async function postLogin() {
 }
 
 function buildSidebar() {
-  const rol = App.user.rol;
   const nav = document.getElementById('sidebarNav');
 
+  // Items base — todos los roles
   const menuItems = [
     { section: 'Principal' },
     { view:'dashboard', icon:'bi-speedometer2', label:'Dashboard' },
-    { section: 'Gestión' },
+    { section: 'Mis Solicitudes' },
     { view:'INASISTENCIAS',    icon:'bi-calendar-x',       label:'Inasistencias' },
     { view:'INCAPACIDADES',    icon:'bi-heart-pulse',      label:'Incapacidades' },
     { view:'CONTRATACIONES',   icon:'bi-person-plus',      label:'Contrataciones' },
@@ -1851,15 +2116,23 @@ function buildSidebar() {
     { view:'OTROS_SI',         icon:'bi-file-earmark-text',label:'Otrosí' },
     { view:'DESCUENTOS',       icon:'bi-currency-dollar',  label:'Descuentos' },
     { view:'NOVEDADES_MASIVAS',icon:'bi-people',           label:'Nov. Masivas' },
-    { section: 'Consultas' },
-    { view:'historial', icon:'bi-clock-history', label:'Historial Colaborador' },
   ];
 
-  if (tieneAccesoAdmin()) {
+  // Legalizador y Admin: panel de gestión de casos + historial
+  if (puedeVerTodos()) {
+    menuItems.push(
+      { section: 'Gestión de Casos' },
+      { view:'panel_legalizador', icon:'bi-kanban-fill', label:'Panel de Casos' },
+      { view:'historial',         icon:'bi-clock-history', label:'Historial Colaborador' },
+    );
+  }
+
+  // Solo Admin: configuración completa
+  if (tieneAccesoConfig()) {
     menuItems.push(
       { section: 'Administración' },
-      { view:'configuracion', icon:'bi-gear-fill', label:'Configuración' },
-      { view:'usuarios',      icon:'bi-people-fill', label:'Usuarios' },
+      { view:'configuracion', icon:'bi-gear-fill',    label:'Configuración' },
+      { view:'usuarios',      icon:'bi-people-fill',  label:'Usuarios' },
       { view:'auditoria',     icon:'bi-journal-text', label:'Auditoría' },
     );
   }
