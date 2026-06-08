@@ -7,4 +7,4 @@
 // Déjala vacía ('') para usar datos de demostración locales.
 // ============================================================
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwrRE7WBWyGyEZ7p7Z3ooHppcis7-hW7r7njCu9SAUhKJ50oERk6AK-9-_lbNbbLukJ/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbw1_xcxEhHhas5WiSlAFztm7mgeCYQu_ln8qGoj6igaFY77P3auVp02dUWS8-GHpvuA/exec';
