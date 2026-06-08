@@ -191,6 +191,15 @@ a{text-decoration:none;color:inherit}button{cursor:pointer}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+/* Listas desplegables: las categorías van sobre fondo claro → texto oscuro
+   (antes heredaban el blanco de .sidebar-item y quedaban invisibles) */
+#listaTipos .sidebar-item{color:#1f2430;border-left-color:transparent}
+#listaTipos .sidebar-item:hover{background:rgba(233,69,96,.06);color:#1f2430}
+#listaTipos .sidebar-item.active{background:rgba(233,69,96,.12);color:#1f2430;border-left-color:var(--highlight);font-weight:600}
+/* Enlaces de archivos adjuntos en el detalle */
+.archivo-link{margin-bottom:4px}
+.archivo-link a{color:var(--highlight);text-decoration:none;font-weight:600}
+.archivo-link a:hover{text-decoration:underline}
   </style>
 
   <!-- Para Google Apps Script: reemplazar los 3 links anteriores por: -->
