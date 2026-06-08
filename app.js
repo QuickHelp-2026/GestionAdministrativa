@@ -546,8 +546,20 @@ async function openFormModal(modulo, recordId = null) {
   const modalEl = document.getElementById('formModal');
   document.getElementById('formModalTitle').textContent = (isEdit ? 'Editar' : 'Nueva') + ' — ' + meta.label;
 
+  // Cargar preguntas personalizadas para este módulo
+  try {
+    App.cache.preguntas = App.cache.preguntas || {};
+    if (!App.cache.preguntas[modulo]) {
+      App.cache.preguntas[modulo] = await API.call({ action: 'getPreguntas', modulo });
+    }
+  } catch(e) {
+    App.cache.preguntas = App.cache.preguntas || {};
+    App.cache.preguntas[modulo] = [];
+  }
+
   const body = document.getElementById('formModalBody');
-  body.innerHTML = renderFormulario(modulo, existing);
+  // IMPORTANTE: pasar {} en lugar de null para que los defaults del formulario funcionen
+  body.innerHTML = renderFormulario(modulo, existing || {});
 
   // Si edición, deshabilitar campos base y mostrar campos de cierre
   if (isEdit) setupFormEdit(existing);
@@ -706,6 +718,7 @@ function renderFormulario(modulo, data = {}) {
           <textarea class="form-control" name="ObservacionCierre" rows="2">${v('ObservacionCierre')}</textarea></div>
       </div>
     </div>
+    ${renderCamposPersonalizados(modulo, data)}
     <div class="form-section">
       <div class="form-section-title">Adjuntar Documentos</div>
       <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
@@ -768,6 +781,61 @@ function colaboradorRowHTML(n) {
       <div class="col-md-3"><input type="text" class="form-control" placeholder="Documento" name="col_doc_${n}"></div>
       <div class="col-md-3"><input type="text" class="form-control" placeholder="Novedad específica" name="col_novedad_${n}"></div>
     </div>
+  </div>`;
+}
+
+// ============================================================
+// CAMPOS PERSONALIZADOS (Preguntas configurables por módulo)
+// ============================================================
+function renderCamposPersonalizados(modulo, data = {}) {
+  const preguntas = (App.cache.preguntas && App.cache.preguntas[modulo]) || [];
+  if (!preguntas.length) return '';
+
+  const campos = preguntas.map(q => {
+    const nombre = q.name || ('custom_' + q.id);
+    const valor  = data[nombre] || '';
+    const req    = (q.requerido === true || q.requerido === 'true') ? 'required' : '';
+    const reqMark= req ? '<span class="text-danger">*</span>' : '';
+
+    let input = '';
+    switch (q.tipo) {
+      case 'Texto largo':
+        input = `<textarea class="form-control" name="${nombre}" rows="3" ${req}>${valor}</textarea>`; break;
+      case 'Número':
+        input = `<input type="number" class="form-control" name="${nombre}" value="${valor}" ${req}>`; break;
+      case 'Fecha':
+        input = `<input type="date" class="form-control" name="${nombre}" value="${valor}" ${req}>`; break;
+      case 'Hora':
+        input = `<input type="time" class="form-control" name="${nombre}" value="${valor}" ${req}>`; break;
+      case 'Sí/No':
+        input = `<select class="form-select" name="${nombre}" ${req}>
+          <option value="">Seleccione...</option>
+          <option value="Sí" ${valor==='Sí'?'selected':''}>Sí</option>
+          <option value="No" ${valor==='No'?'selected':''}>No</option>
+        </select>`; break;
+      case 'Lista desplegable':
+      case 'Selección múltiple': {
+        const opts = (q.opciones || '').split(',').map(o => o.trim()).filter(Boolean);
+        input = `<select class="form-select" name="${nombre}" ${req}>
+          <option value="">Seleccione...</option>
+          ${opts.map(o => `<option value="${o}" ${valor===o?'selected':''}>${o}</option>`).join('')}
+        </select>`; break;
+      }
+      default: // Texto
+        input = `<input type="text" class="form-control" name="${nombre}" value="${valor}" ${req}>`;
+    }
+    return `<div class="col-md-6">
+      <label class="form-label">${q.label} ${reqMark}</label>
+      ${input}
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="form-section">
+    <div class="form-section-title" style="color:#6f42c1">
+      <i class="bi bi-stars me-1"></i>Campos Adicionales
+    </div>
+    <div class="row g-3">${campos}</div>
   </div>`;
 }
 
@@ -1135,12 +1203,19 @@ async function guardarUser(userId) {
 // CONFIGURACIÓN ADMINISTRATIVA
 // ============================================================
 function renderConfiguracion(el) {
+  if (!tieneAccesoConfig()) {
+    el.innerHTML = `<div class="alert alert-warning mt-2">
+      <i class="bi bi-shield-exclamation me-2"></i>
+      <strong>Acceso restringido.</strong> Solo el Administrador puede acceder a la configuración.
+    </div>`;
+    return;
+  }
   el.innerHTML = `
   <div class="fade-in">
     <div class="config-grid">
       ${cfgCard('🏗️','Proyectos','Administrar proyectos activos e inactivos','proyectos_config')}
       ${cfgCard('📋','Listas Desplegables','Ciudades, cargos, tipos y más opciones','listas_config')}
-      ${cfgCard('❓','Preguntas Personalizadas','Campos adicionales por módulo','preguntas_config')}
+      ${cfgCard('❓','Preguntas por Formulario','Añadir campos personalizados a cada módulo','preguntas_config')}
       ${cfgCard('⏱️','SLA y Alertas','Tiempos máximos por tipo de gestión','sla')}
       ${cfgCard('👥','Usuarios','Crear y administrar cuentas de usuario','usuarios')}
       ${cfgCard('📊','Auditoría','Log completo de cambios del sistema','auditoria')}
@@ -1422,75 +1497,157 @@ async function verificarSLA() {
 async function renderPreguntasConfig(el) {
   showLoading();
   const preguntas = await API.call({ action: 'getPreguntas', modulo: '' }).finally(hideLoading);
+  App._preguntas = preguntas;
+
+  // Limpiar caché de preguntas para forzar recarga en los formularios
+  App.cache.preguntas = {};
+
+  // Agrupar por módulo
+  const grupos = {};
+  preguntas.forEach(p => {
+    const mod = p.modulo || 'Todos';
+    if (!grupos[mod]) grupos[mod] = [];
+    grupos[mod].push(p);
+  });
+
+  const modulosOrden = ['Todos', ...Object.keys(MODULOS)];
+  const gruposHTML = modulosOrden.map(mod => {
+    const items = grupos[mod] || [];
+    const modLabel = MODULOS[mod] ? MODULOS[mod].label : mod;
+    return `
+    <div class="card-panel mb-3">
+      <div class="card-panel-header" style="background:linear-gradient(135deg,var(--primary),var(--accent))">
+        <i class="bi bi-file-earmark-text text-white me-2"></i>
+        <h6 class="text-white mb-0">${modLabel}</h6>
+        <button class="btn-primary-custom ms-auto" style="padding:5px 14px;font-size:.8rem"
+          onclick="openPreguntaModal(null,'${mod}')">
+          <i class="bi bi-plus-lg"></i> Agregar campo
+        </button>
+      </div>
+      <div class="card-panel-body p-0">
+        ${items.length ? `
+        <table class="table table-hover mb-0">
+          <thead><tr>
+            <th>Etiqueta</th><th>Nombre campo</th><th>Tipo</th><th>Opciones</th><th>Obligatorio</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>
+            ${items.map(p => `<tr>
+              <td><strong>${p.label}</strong></td>
+              <td><code style="font-size:.75rem">${p.name||p.id}</code></td>
+              <td><span class="badge bg-primary">${p.tipo}</span></td>
+              <td><small class="text-muted">${p.opciones||'—'}</small></td>
+              <td><span class="badge ${p.requerido==='true'||p.requerido===true?'bg-danger':'bg-secondary'}">${(p.requerido==='true'||p.requerido===true)?'Sí':'No'}</span></td>
+              <td>
+                <div class="action-btns">
+                  <button class="btn-action edit" onclick="editarPregunta('${p.id}')" title="Editar"><i class="bi bi-pencil"></i></button>
+                  <button class="btn-action del" onclick="eliminarPregunta('${p.id}')" title="Eliminar"><i class="bi bi-trash"></i></button>
+                </div>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>` : `<div class="text-center text-muted py-3" style="font-size:.85rem">
+          <i class="bi bi-plus-circle me-1"></i>Sin campos personalizados — haz clic en "Agregar campo" para añadir uno
+        </div>`}
+      </div>
+    </div>`;
+  }).join('');
 
   el.innerHTML = `
-  <div class="fade-in table-wrapper">
-    <div class="table-toolbar">
-      <h6 class="mb-0"><i class="bi bi-question-circle me-2 text-danger"></i>Preguntas Personalizadas</h6>
-      <div class="ms-auto"><button class="btn-primary-custom" onclick="openPreguntaModal()"><i class="bi bi-plus-lg"></i> Nueva</button></div>
+  <div class="fade-in">
+    <div class="alert alert-info py-2 mb-3" style="font-size:.85rem">
+      <i class="bi bi-info-circle me-2"></i>
+      Los campos que agregues aquí aparecerán en los formularios de cada módulo cuando el coordinador crea una solicitud.
     </div>
-    <div class="table-responsive">
-      <table class="table table-hover mb-0">
-        <thead><tr><th>ID</th><th>Módulo</th><th>Pregunta</th><th>Tipo</th><th>Obligatoria</th><th>Acciones</th></tr></thead>
-        <tbody>
-          ${preguntas.map(p => `<tr>
-            <td><code style="font-size:.75rem">${p.id}</code></td>
-            <td>${p.modulo}</td><td>${p.label}</td><td>${p.tipo}</td>
-            <td><span class="badge ${p.requerido==='true'||p.requerido===true?'bg-danger':'bg-secondary'}">${p.requerido?'Sí':'No'}</span></td>
-            <td>
-              <div class="action-btns">
-                <button class="btn-action del" onclick="eliminarPregunta('${p.id}')"><i class="bi bi-trash"></i></button>
-              </div>
-            </td>
-          </tr>`).join('')}
-          ${!preguntas.length ? '<tr><td colspan="6"><div class="empty-state"><div class="es-icon">❓</div><p>Sin preguntas configuradas</p></div></td></tr>' : ''}
-        </tbody>
-      </table>
-    </div>
+    ${gruposHTML}
   </div>`;
-  App._preguntas = preguntas;
 }
 
-function openPreguntaModal() {
-  const modOpts = ['Todos',...Object.keys(MODULOS)].map(m => `<option>${m}</option>`).join('');
+function editarPregunta(id) {
+  const p = (App._preguntas || []).find(q => q.id === id);
+  if (p) openPreguntaModal(p, p.modulo);
+}
+
+function openPreguntaModal(existente = null, moduloPresel = '') {
+  const isEdit = !!existente;
+  const p = existente || {};
+  const modOpts = ['Todos', ...Object.keys(MODULOS)].map(m => {
+    const sel = (p.modulo || moduloPresel) === m ? 'selected' : '';
+    const label = MODULOS[m] ? MODULOS[m].label : m;
+    return `<option value="${m}" ${sel}>${label}</option>`;
+  }).join('');
+
+  const tipoOpts = ['Texto','Texto largo','Número','Fecha','Hora','Lista desplegable','Selección múltiple','Sí/No'].map(t =>
+    `<option ${p.tipo===t?'selected':''}>${t}</option>`
+  ).join('');
+
+  document.querySelector('#preModal .modal-title').textContent =
+    isEdit ? `Editar campo — ${p.label}` : 'Nuevo campo personalizado';
+
   document.getElementById('preModalBody').innerHTML = `
   <form id="preForm">
     <div class="row g-3">
-      <div class="col-md-6"><label class="form-label">Módulo <span class="required">*</span></label>
-        <select class="form-select" name="modulo" required><option value="">Seleccione...</option>${modOpts}</select></div>
-      <div class="col-md-6"><label class="form-label">Etiqueta (Pregunta) <span class="required">*</span></label>
-        <input class="form-control" name="label" required></div>
-      <div class="col-md-6"><label class="form-label">Nombre campo</label>
-        <input class="form-control" name="name" placeholder="sin_espacios"></div>
-      <div class="col-md-6"><label class="form-label">Tipo <span class="required">*</span></label>
-        <select class="form-select" name="tipo" required>
-          ${['Texto','Texto largo','Número','Fecha','Hora','Lista desplegable','Selección múltiple','Sí/No','Archivo'].map(t=>`<option>${t}</option>`).join('')}
-        </select></div>
-      <div class="col-md-6"><label class="form-label">Opciones (si aplica)</label>
-        <input class="form-control" name="opciones" placeholder="Opción1,Opción2,Opción3"></div>
-      <div class="col-md-6 d-flex align-items-center">
-        <div class="form-check mt-3">
-          <input class="form-check-input" type="checkbox" name="requerido" id="chkReq">
-          <label class="form-check-label" for="chkReq">Campo obligatorio</label>
+      <div class="col-md-6">
+        <label class="form-label">Módulo donde aparece <span class="text-danger">*</span></label>
+        <select class="form-select" name="modulo" required>
+          <option value="">Seleccione...</option>${modOpts}
+        </select>
+        <div class="form-text">Elige el formulario donde se mostrará este campo</div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Etiqueta (texto visible) <span class="text-danger">*</span></label>
+        <input class="form-control" name="label" value="${p.label||''}" required placeholder="Ej: Número de contrato">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Nombre interno del campo</label>
+        <input class="form-control" name="name" value="${p.name||''}" placeholder="Ej: NumeroContrato (sin espacios)">
+        <div class="form-text">Se usa para guardar el valor. Si se deja vacío se genera automáticamente.</div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Tipo de campo <span class="text-danger">*</span></label>
+        <select class="form-select" name="tipo" required id="tipoCampo" onchange="toggleOpcionesCampo(this.value)">
+          ${tipoOpts}
+        </select>
+      </div>
+      <div class="col-12" id="seccionOpciones" style="${['Lista desplegable','Selección múltiple'].includes(p.tipo)?'':'display:none'}">
+        <label class="form-label">Opciones de la lista</label>
+        <input class="form-control" name="opciones" value="${p.opciones||''}"
+               placeholder="Opción 1, Opción 2, Opción 3 (separadas por coma)">
+        <div class="form-text">Escribe las opciones separadas por coma</div>
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="chkReq" ${(p.requerido==='true'||p.requerido===true)?'checked':''}>
+          <label class="form-check-label" for="chkReq"><strong>Campo obligatorio</strong> — el coordinador no podrá guardar sin llenarlo</label>
         </div>
       </div>
     </div>
   </form>`;
+
   document.getElementById('btnGuardarPre').onclick = async () => {
     const form = document.getElementById('preForm');
     if (!form.checkValidity()) { form.reportValidity(); return; }
-    const fd = {}; new FormData(form).forEach((v,k)=>{fd[k]=v;});
+    const fd = {};
+    new FormData(form).forEach((v, k) => { fd[k] = v; });
     fd.requerido = document.getElementById('chkReq')?.checked;
+    if (isEdit) fd.id = p.id; // Preservar ID para edición
+    // Auto-generar nombre si está vacío
+    if (!fd.name) fd.name = 'campo_' + (fd.label||'x').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'').toLowerCase();
     showLoading();
     try {
       await API.call({ action: 'savePregunta', ...fd });
-      toast('success', 'Pregunta guardada');
+      toast('success', isEdit ? 'Campo actualizado' : 'Campo agregado al formulario');
       bootstrap.Modal.getInstance(document.getElementById('preModal')).hide();
+      App.cache.preguntas = {}; // Limpiar caché
       await renderPreguntasConfig(document.getElementById('content'));
-    } catch(e) { toast('error',e.message); }
+    } catch(e) { toast('error', e.message); }
     finally { hideLoading(); }
   };
   bootstrap.Modal.getOrCreateInstance(document.getElementById('preModal')).show();
+}
+
+function toggleOpcionesCampo(tipo) {
+  const sec = document.getElementById('seccionOpciones');
+  if (sec) sec.style.display = ['Lista desplegable','Selección múltiple'].includes(tipo) ? '' : 'none';
 }
 
 async function eliminarPregunta(id) {
@@ -2061,6 +2218,14 @@ async function postLogin() {
 
   // Render sidebar
   buildSidebar();
+
+  // Ocultar botón de configuración del topbar para roles sin acceso
+  document.querySelectorAll('#topbar .topbar-btn').forEach(btn => {
+    const oc = btn.getAttribute('onclick') || '';
+    if (oc.includes('configuracion') && !tieneAccesoConfig()) {
+      btn.style.display = 'none';
+    }
+  });
 
   // Update user info
   document.getElementById('sidebarUserName').textContent = user.nombre;
