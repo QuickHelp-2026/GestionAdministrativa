@@ -65,17 +65,11 @@ const ESTADOS_GESTION = ['Pendiente', 'En Proceso', 'Finalizado', 'Cancelado'];
 const API = {
   call(params) {
     return new Promise((resolve, reject) => {
-      // 1. GitHub Pages → GAS via POST con Content-Type "text/plain".
-      //    text/plain = petición simple → sin preflight CORS (que GAS no responde),
-      //    y el payload viaja en el body, NO en la URL (antes el Base64 saturaba
-      //    ?data= y daba 413 / "Failed to fetch" al adjuntar archivos).
+      // 1. GitHub Pages → GAS via GET (más confiable: evita el problema POST→GET del redirect de GAS)
       if (typeof GAS_URL !== 'undefined' && GAS_URL) {
-        fetch(GAS_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          redirect: 'follow',
-          body: JSON.stringify(params),
-        })
+        // POST text/plain: evita el preflight CORS (que GAS no responde) y el límite
+        // de URL — el Base64 de los archivos viaja en el body, no en ?data=.
+        fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, redirect:'follow', body: JSON.stringify(params) })
           .then(r => {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
@@ -218,7 +212,6 @@ function generateMockAuditoria(n) {
 // ROUTER
 // ============================================================
 function navigate(view, params = {}) {
-  // El Coordinador no tiene acceso al Dashboard (solo Legalizador/Admin)
   if (view === 'dashboard' && !puedeVerTodos()) view = 'INASISTENCIAS';
   App.currentView = view;
   document.querySelectorAll('.sidebar-item').forEach(el => {
@@ -919,6 +912,44 @@ async function guardarForm(modulo, recordId) {
 }
 
 // ============================================================
+// PORTADA (imagen de cabecera por usuario)
+// ============================================================
+function renderPortada() {
+  let banner = document.getElementById('coverBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'coverBanner';
+    const content = document.getElementById('content');
+    if (!content) return;
+    content.parentNode.insertBefore(banner, content);
+  }
+  const img = App.user && App.user.portada;
+  banner.style.backgroundImage = img ? `url("${img}")` : '';
+  banner.innerHTML =
+    `<div class="cover-overlay"></div>` +
+    `<div class="cover-content"><div class="cover-title">Hola, ${App.user ? App.user.nombre : ''}</div>` +
+    `<div class="cover-sub">${App.user ? App.user.rol : ''}</div></div>` +
+    `<button class="cover-edit" onclick="cambiarPortada()" title="Cambiar imagen de portada"><i class="bi bi-camera"></i> Portada</button>` +
+    `<input type="file" id="coverInput" accept="image/png,image/jpeg" hidden>`;
+  const input = document.getElementById('coverInput');
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) { toast('error', 'La imagen supera 10 MB'); return; }
+    showLoading();
+    try {
+      const up  = await uploadFile(f, 'PORTADAS', '');
+      const res = await API.call({ action: 'setPortada', usuario: App.user.email, fileId: up.fileId });
+      App.user.portada = res.url;
+      renderPortada();
+      toast('success', 'Portada actualizada');
+    } catch (e) { toast('error', e.message); }
+    finally { hideLoading(); }
+  };
+}
+function cambiarPortada() { const i = document.getElementById('coverInput'); if (i) i.click(); }
+
+// ============================================================
 // DETALLE / VER REGISTRO
 // ============================================================
 function renderArchivos(v) {
@@ -944,8 +975,7 @@ function verDetalle(modulo, id) {
     .map(([k,v]) => {
       if (k === 'Archivos') {
         const val = renderArchivos(v);
-        if (!val) return '';
-        return `<div class="detail-row"><div class="detail-label">Archivos</div><div class="detail-value">${val}</div></div>`;
+        return val ? `<div class="detail-row"><div class="detail-label">Archivos</div><div class="detail-value">${val}</div></div>` : '';
       }
       const val = k === 'Estado' ? estadoBadge(v) : (String(v||'—'));
       return `<div class="detail-row"><div class="detail-label">${k}</div><div class="detail-value">${val}</div></div>`;
@@ -1723,10 +1753,7 @@ function fileIcon(name) {
 
 async function uploadFile(file, modulo, recordId) {
   return new Promise((resolve, reject) => {
-    if (file.size > 10 * 1024 * 1024) {
-      reject(new Error(`"${file.name}" supera el límite de 10 MB.`));
-      return;
-    }
+    if (file.size > 10 * 1024 * 1024) { reject(new Error(`"${file.name}" supera el límite de 10 MB.`)); return; }
     const reader = new FileReader();
     reader.onload = async e => {
       try {
@@ -2269,30 +2296,24 @@ async function postLogin() {
   // Load cache
   showLoading();
   try {
-    [App.cache.proyectos, App.cache.listas['Ciudad'], App.cache.listas['Operacion'],
-     App.cache.listas['Cargo'], App.cache.listas['TipoIncapacidad'], App.cache.listas['TipoDescuento'],
-     App.cache.listas['TipoContrato']] = await Promise.all([
-      API.call({ action: 'getProyectos', soloActivos: true }),
-      API.call({ action: 'getListas', tipo: 'Ciudad' }),
-      API.call({ action: 'getListas', tipo: 'Operacion' }),
-      API.call({ action: 'getListas', tipo: 'Cargo' }),
-      API.call({ action: 'getListas', tipo: 'TipoIncapacidad' }),
-      API.call({ action: 'getListas', tipo: 'TipoDescuento' }),
-      API.call({ action: 'getListas', tipo: 'TipoContrato' }),
-    ]);
+    // Una sola llamada al servidor (antes eran 8 → mucha latencia al iniciar)
+    const boot = await API.call({ action: 'getBootstrap', usuario: user.email });
+    App.cache.proyectos = boot.proyectos || [];
+    App.cache.listas = {};
+    (boot.listas || []).forEach(function (l) {
+      (App.cache.listas[l.tipo] = App.cache.listas[l.tipo] || []).push(l);
+    });
+    App.cache.pendingAlerts = boot.alertas || 0;
   } catch(e) { console.warn('Cache load partial:', e); }
   finally { hideLoading(); }
 
-  // Check SLA alerts
-  try {
-    const alerts = await API.call({ action: 'checkSLAAlerts' });
-    if (alerts.length) {
-      App.cache.pendingAlerts = alerts.length;
-      const badge = document.querySelector('.topbar-btn .notif-dot');
-      if (badge) badge.title = `${alerts.length} alertas SLA`;
-    }
-  } catch(e) {}
+  // Alertas SLA (ya vienen en el bootstrap → sin llamada extra)
+  if (App.cache.pendingAlerts) {
+    const badge = document.querySelector('.topbar-btn .notif-dot');
+    if (badge) badge.title = `${App.cache.pendingAlerts} alertas SLA`;
+  }
 
+  renderPortada();
   navigate(puedeVerTodos() ? 'dashboard' : 'INASISTENCIAS');
 }
 
@@ -2301,7 +2322,6 @@ function buildSidebar() {
 
   // Items base — todos los roles
   const menuItems = [];
-
   // Dashboard SOLO para Legalizador y Administrador
   if (puedeVerTodos()) {
     menuItems.push(
@@ -2309,7 +2329,6 @@ function buildSidebar() {
       { view:'dashboard', icon:'bi-speedometer2', label:'Dashboard' },
     );
   }
-
   menuItems.push(
     { section: 'Mis Solicitudes' },
     { view:'INASISTENCIAS',    icon:'bi-calendar-x',       label:'Inasistencias' },
