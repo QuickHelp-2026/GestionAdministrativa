@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistema de Gestión Administrativa</title>
+
+  <!-- Bootstrap 5 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <!-- App styles -->
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Para Google Apps Script: reemplazar los 3 links anteriores por: -->
+  <!--
+  <?!= include('styles'); ?>
+  -->
+</head>
+<body>
+
+<!-- ============================================================
+     PANTALLA DE LOGIN
+     ============================================================ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="brand-icon"><i class="bi bi-building-gear"></i></div>
+      <h2>Gestión Administrativa</h2>
+      <p>Sistema de Novedades de Personal</p>
+    </div>
+
+    <div class="alert alert-danger py-2" id="loginError" style="display:none;font-size:.85rem"></div>
+
+    <form id="loginForm">
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Correo electrónico</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-envelope"></i></span>
+          <input type="email" class="form-control" id="loginEmail" placeholder="usuario@empresa.com"
+                 value="admin@sistema.com" required autocomplete="email">
+        </div>
+      </div>
+      <div class="mb-4">
+        <label class="form-label fw-semibold">Contraseña</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-lock"></i></span>
+          <input type="password" class="form-control" id="loginPassword" placeholder="••••••••"
+                 value="Admin123*" required autocomplete="current-password">
+          <button type="button" class="input-group-text" id="togglePassword" style="cursor:pointer">
+            <i class="bi bi-eye"></i>
+          </button>
+        </div>
+      </div>
+      <button type="submit" id="btnLogin" class="btn btn-danger w-100 fw-bold py-2">
+        <i class="bi bi-box-arrow-in-right me-2"></i>Ingresar al Sistema
+      </button>
+    </form>
+
+    <div class="mt-4 text-center text-muted" style="font-size:.75rem">
+      <i class="bi bi-shield-lock me-1"></i>Acceso restringido a personal autorizado
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     APLICACIÓN PRINCIPAL
+     ============================================================ -->
+<div id="app" style="display:none">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-icon"><i class="bi bi-building-gear"></i></div>
+      <div>
+        <div class="logo-text">Gestión Admin</div>
+        <div class="logo-sub">Sistema de Novedades</div>
+      </div>
+    </div>
+    <nav id="sidebarNav"></nav>
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="user-avatar" id="sidebarAvatar">A</div>
+        <div style="overflow:hidden">
+          <div class="u-name" id="sidebarUserName">Usuario</div>
+          <div class="u-role" id="sidebarUserRole">Rol</div>
+        </div>
+        <button class="btn btn-link text-white p-0 ms-auto" onclick="logout()" title="Cerrar sesión">
+          <i class="bi bi-box-arrow-right"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOGGLE SIDEBAR -->
+  <button id="sidebar-toggle" title="Ocultar menú">
+    <i class="bi bi-chevron-left"></i>
+  </button>
+
+  <!-- MAIN AREA -->
+  <div id="main-area">
+
+    <!-- TOPBAR -->
+    <div id="topbar">
+      <div class="page-title" id="pageTitle">Dashboard</div>
+
+      <div class="topbar-search">
+        <i class="bi bi-search text-muted"></i>
+        <input type="text" id="globalSearch" placeholder="Buscar en el sistema... (Enter)">
+      </div>
+
+      <div class="topbar-actions">
+        <button class="topbar-btn" onclick="verificarAlertas()" title="Alertas SLA">
+          <i class="bi bi-bell"></i>
+          <span class="notif-dot" id="notifDot" style="display:none"></span>
+        </button>
+        <button class="topbar-btn" onclick="navigate('dashboard')" title="Dashboard">
+          <i class="bi bi-grid-3x3-gap"></i>
+        </button>
+        <button class="topbar-btn" onclick="navigate('configuracion')" title="Configuración">
+          <i class="bi bi-gear"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div id="content"></div>
+  </div><!-- /main-area -->
+</div><!-- /app -->
+
+<!-- ============================================================
+     MODALES
+     ============================================================ -->
+
+<!-- Modal Formulario (Crear/Editar) -->
+<div class="modal fade" id="formModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="formModalTitle">Formulario</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="formModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="btnGuardarForm" class="btn-primary-custom">
+          <i class="bi bi-save me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Ver Detalle -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="detailModalTitle">Detalle</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="detailModalBody"></div>
+      <div class="modal-footer" id="detailModalFooter">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Usuarios -->
+<div class="modal fade" id="userModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="userModalTitle">Usuario</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="userModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="btnGuardarUser" class="btn-primary-custom">
+          <i class="bi bi-save me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Proyectos -->
+<div class="modal fade" id="proyModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="proyModalTitle">Proyecto</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="proyModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="btnGuardarProy" class="btn-primary-custom">
+          <i class="bi bi-save me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Listas -->
+<div class="modal fade" id="listaModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="listaModalTitle">Valor de Lista</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="listaModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="btnGuardarLista" class="btn-primary-custom">
+          <i class="bi bi-save me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Preguntas -->
+<div class="modal fade" id="preModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Nueva Pregunta Personalizada</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="preModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="btnGuardarPre" class="btn-primary-custom">
+          <i class="bi bi-save me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ============================================================
+     SCRIPTS
+     ============================================================ -->
+<!-- Bootstrap 5 JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<!-- Configuración (GAS_URL) -->
+<script src="config.js"></script>
+<!-- App JS -->
+<script src="app.js"></script>
+
+<!-- Para Google Apps Script: reemplazar los 3 scripts anteriores por: -->
+<!--
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<?!= include('javascript'); ?>
+-->
+
+<!-- Funciones extra globales -->
+<script>
+// Logout
+function logout() {
+  if (!confirm('¿Cerrar sesión?')) return;
+  App.user = null;
+  document.getElementById('login-screen').style.display = '';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('loginEmail').value = '';
+  document.getElementById('loginPassword').value = '';
+}
+
+// Verificar alertas SLA desde topbar
+async function verificarAlertas() {
+  showLoading();
+  try {
+    const alerts = await API.call({ action: 'checkSLAAlerts' });
+    if (!alerts.length) {
+      toast('success', 'No hay alertas SLA activas');
+    } else {
+      toast('warning', `${alerts.length} solicitud(es) con SLA vencido`);
+      const dot = document.getElementById('notifDot');
+      if (dot) dot.style.display = '';
+    }
+  } catch(e) { toast('error', e.message); }
+  finally { hideLoading(); }
+}
+
+// Inicializar sistema (solo primera vez)
+async function inicializarSistema() {
+  if (!confirm('¿Inicializar el sistema? Esto creará las hojas en Google Sheets.')) return;
+  showLoading();
+  try {
+    const res = await API.call({ action: 'initSystem' });
+    toast('success', res.message);
+    alert('Sistema iniciado.\nSpreadsheet: ' + res.spreadsheetUrl);
+  } catch(e) { toast('error', e.message); }
+  finally { hideLoading(); }
+}
+</script>
+
+</body>
+</html>
