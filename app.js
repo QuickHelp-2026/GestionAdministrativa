@@ -65,10 +65,17 @@ const ESTADOS_GESTION = ['Pendiente', 'En Proceso', 'Finalizado', 'Cancelado'];
 const API = {
   call(params) {
     return new Promise((resolve, reject) => {
-      // 1. GitHub Pages → GAS via GET (más confiable: evita el problema POST→GET del redirect de GAS)
+      // 1. GitHub Pages → GAS via POST con Content-Type "text/plain".
+      //    text/plain = petición "simple" → sin preflight OPTIONS (que GAS no responde).
+      //    El payload viaja en el body, NO en la URL → no hay límite de longitud
+      //    (antes el Base64 de los archivos saturaba ?data= y daba 413 / CORS).
       if (typeof GAS_URL !== 'undefined' && GAS_URL) {
-        const url = GAS_URL + '?data=' + encodeURIComponent(JSON.stringify(params));
-        fetch(url, { redirect: 'follow' })
+        fetch(GAS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          redirect: 'follow', // GAS responde con un 302 a googleusercontent.com
+          body: JSON.stringify(params),
+        })
           .then(r => {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
@@ -1696,6 +1703,12 @@ function fileIcon(name) {
 
 async function uploadFile(file, modulo, recordId) {
   return new Promise((resolve, reject) => {
+    // Base64 infla ~33%; el POST a GAS admite archivos grandes, pero >10 MB
+    // se vuelve lento. Cortamos aquí con un mensaje claro al usuario.
+    if (file.size > 10 * 1024 * 1024) {
+      reject(new Error(`"${file.name}" supera el límite de 10 MB.`));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = async e => {
       try {
