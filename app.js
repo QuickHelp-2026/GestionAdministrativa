@@ -66,14 +66,14 @@ const API = {
   call(params) {
     return new Promise((resolve, reject) => {
       // 1. GitHub Pages → GAS via POST con Content-Type "text/plain".
-      //    text/plain = petición "simple" → sin preflight OPTIONS (que GAS no responde).
-      //    El payload viaja en el body, NO en la URL → no hay límite de longitud
-      //    (antes el Base64 de los archivos saturaba ?data= y daba 413 / CORS).
+      //    text/plain = petición simple → sin preflight CORS (que GAS no responde),
+      //    y el payload viaja en el body, NO en la URL (antes el Base64 saturaba
+      //    ?data= y daba 413 / "Failed to fetch" al adjuntar archivos).
       if (typeof GAS_URL !== 'undefined' && GAS_URL) {
         fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          redirect: 'follow', // GAS responde con un 302 a googleusercontent.com
+          redirect: 'follow',
           body: JSON.stringify(params),
         })
           .then(r => {
@@ -218,6 +218,8 @@ function generateMockAuditoria(n) {
 // ROUTER
 // ============================================================
 function navigate(view, params = {}) {
+  // El Coordinador no tiene acceso al Dashboard (solo Legalizador/Admin)
+  if (view === 'dashboard' && !puedeVerTodos()) view = 'INASISTENCIAS';
   App.currentView = view;
   document.querySelectorAll('.sidebar-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -919,6 +921,19 @@ async function guardarForm(modulo, recordId) {
 // ============================================================
 // DETALLE / VER REGISTRO
 // ============================================================
+function renderArchivos(v) {
+  if (!v) return '';
+  let arr;
+  try { arr = typeof v === 'string' ? JSON.parse(v) : v; } catch (e) { return ''; }
+  if (!Array.isArray(arr) || !arr.length) return '';
+  const esc = s => String(s || '').replace(/[<>"&]/g, c => ({'<':'&lt;','>':'&gt;','"':'&quot;','&':'&amp;'}[c]));
+  return arr.map(a =>
+    `<div class="archivo-link"><i class="bi bi-paperclip"></i> ` +
+    `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.nombre)}</a> ` +
+    `<small class="text-muted">${esc(a.fecha || '')}</small></div>`
+  ).join('');
+}
+
 function verDetalle(modulo, id) {
   const record = (App.cache.records[modulo]||[]).find(r => r.ID === id);
   if (!record) return;
@@ -927,6 +942,11 @@ function verDetalle(modulo, id) {
   const rows = Object.entries(record)
     .filter(([k]) => !ignoreKeys.includes(k))
     .map(([k,v]) => {
+      if (k === 'Archivos') {
+        const val = renderArchivos(v);
+        if (!val) return '';
+        return `<div class="detail-row"><div class="detail-label">Archivos</div><div class="detail-value">${val}</div></div>`;
+      }
       const val = k === 'Estado' ? estadoBadge(v) : (String(v||'—'));
       return `<div class="detail-row"><div class="detail-label">${k}</div><div class="detail-value">${val}</div></div>`;
     }).join('');
@@ -1703,8 +1723,6 @@ function fileIcon(name) {
 
 async function uploadFile(file, modulo, recordId) {
   return new Promise((resolve, reject) => {
-    // Base64 infla ~33%; el POST a GAS admite archivos grandes, pero >10 MB
-    // se vuelve lento. Cortamos aquí con un mensaje claro al usuario.
     if (file.size > 10 * 1024 * 1024) {
       reject(new Error(`"${file.name}" supera el límite de 10 MB.`));
       return;
@@ -2275,16 +2293,24 @@ async function postLogin() {
     }
   } catch(e) {}
 
-  navigate('dashboard');
+  navigate(puedeVerTodos() ? 'dashboard' : 'INASISTENCIAS');
 }
 
 function buildSidebar() {
   const nav = document.getElementById('sidebarNav');
 
   // Items base — todos los roles
-  const menuItems = [
-    { section: 'Principal' },
-    { view:'dashboard', icon:'bi-speedometer2', label:'Dashboard' },
+  const menuItems = [];
+
+  // Dashboard SOLO para Legalizador y Administrador
+  if (puedeVerTodos()) {
+    menuItems.push(
+      { section: 'Principal' },
+      { view:'dashboard', icon:'bi-speedometer2', label:'Dashboard' },
+    );
+  }
+
+  menuItems.push(
     { section: 'Mis Solicitudes' },
     { view:'INASISTENCIAS',    icon:'bi-calendar-x',       label:'Inasistencias' },
     { view:'INCAPACIDADES',    icon:'bi-heart-pulse',      label:'Incapacidades' },
@@ -2294,7 +2320,7 @@ function buildSidebar() {
     { view:'OTROS_SI',         icon:'bi-file-earmark-text',label:'Otrosí' },
     { view:'DESCUENTOS',       icon:'bi-currency-dollar',  label:'Descuentos' },
     { view:'NOVEDADES_MASIVAS',icon:'bi-people',           label:'Nov. Masivas' },
-  ];
+  );
 
   // Legalizador y Admin: panel de gestión de casos + historial
   if (puedeVerTodos()) {
